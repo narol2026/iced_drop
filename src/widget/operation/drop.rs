@@ -1,6 +1,6 @@
-use iced_core::{Rectangle, Vector};
-use iced_core::widget::{Id, Operation};
 use iced_core::widget::operation::{Outcome, Scrollable};
+use iced_core::widget::{Id, Operation};
+use iced_core::{Rectangle, Vector};
 
 /// Produces an [`Operation`] that will find the drop zones that pass a filter on the zone's bounds.
 /// For any drop zone to be considered, the Element must have some Id.

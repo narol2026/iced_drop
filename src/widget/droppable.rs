@@ -25,6 +25,7 @@ pub struct Droppable<
     id: Option<Id>,
     drag_threshold: f32,
     on_press: Option<Message>,
+    on_double_click: Option<Message>,
     on_click: Option<Message>,
     on_drop: Option<Box<dyn Fn(Point, Rectangle) -> Message + 'a>>,
     on_drag: Option<Box<dyn Fn(Point, Rectangle) -> Message + 'a>>,
@@ -34,6 +35,8 @@ pub struct Droppable<
     drag_hide: bool,
     drag_center: bool,
     drag_size: Option<Size>,
+    drag_opacity: f32,
+    drag_border_radius: f32,
     reset_delay: usize,
     status: Option<Status>,
 }
@@ -52,6 +55,7 @@ where
             id: None,
             drag_threshold: 5.0,
             on_press: None,
+            on_double_click: None,
             on_click: None,
             on_drop: None,
             on_drag: None,
@@ -61,6 +65,8 @@ where
             drag_hide: false,
             drag_center: false,
             drag_size: None,
+            drag_opacity: 0.85,
+            drag_border_radius: 0.0,
             reset_delay: 0,
             status: None,
         }
@@ -96,6 +102,14 @@ where
     /// This will get triggered only when not dragging.
     pub fn on_press(mut self, message: Message) -> Self {
         self.on_press = Some(message);
+        self
+    }
+
+    /// Sets the message that will be produced when the [`Droppable`] is double-clicked.
+    ///
+    /// This will get triggered only when not dragging.
+    pub fn on_double_click(mut self, message: Message) -> Self {
+        self.on_double_click = Some(message);
         self
     }
 
@@ -152,6 +166,18 @@ where
     /// Sets whether the [`Droppable`] should be be resized to a given size while dragging.
     pub fn drag_size(mut self, hide_size: Size) -> Self {
         self.drag_size = Some(hide_size);
+        self
+    }
+
+    /// Sets the opacity of the drag overlay (0.0 to 1.0).
+    pub fn drag_opacity(mut self, opacity: f32) -> Self {
+        self.drag_opacity = opacity.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Sets the border radius of the drag overlay (for rounded corners on the dragged preview).
+    pub fn drag_border_radius(mut self, radius: f32) -> Self {
+        self.drag_border_radius = radius;
         self
     }
 
@@ -336,6 +362,22 @@ where
                             shell.publish(on_click);
                         }
 
+                        if let Some(position) = cursor.position()
+                            && let Some(message) = self.on_double_click.as_ref()
+                        {
+                            let new_click = mouse::Click::new(
+                                position,
+                                mouse::Button::Left,
+                                state.previous_click,
+                            );
+
+                            if new_click.kind() == mouse::click::Kind::Double {
+                                shell.publish(message.clone());
+                            }
+
+                            state.previous_click = Some(new_click);
+                        }
+
                         shell.capture_event();
                     }
                 }
@@ -382,8 +424,7 @@ where
                 }
                 Event::Mouse(mouse::Event::CursorMoved { position })
                 | Event::Touch(touch::Event::FingerMoved {
-                    position,
-                    ..
+                    position, ..
                 }) => {
                     let mut position = position.clone();
 
@@ -476,7 +517,7 @@ where
         let state = tree.state.downcast_ref::<State>();
 
         if let Action::Drag(_, _) = state.action {
-            return mouse::Interaction::Grabbing;
+            return mouse::Interaction::Move;
         }
 
         let child_interact = self.content.as_widget().mouse_interaction(
@@ -522,6 +563,8 @@ where
                 content: &mut self.content,
                 tree: &mut tree.children[0],
                 overlay_bounds: state.overlay_bounds,
+                overlay_opacity: self.drag_opacity,
+                drag_border_radius: self.drag_border_radius,
             })));
         }
         self.content.as_widget_mut().overlay(
@@ -548,11 +591,12 @@ where
     }
 }
 
-#[derive(Default, Clone, Copy, PartialEq, Debug)]
+#[derive(Default, Clone, Debug)]
 pub struct State {
     widget_pos: Point,
     overlay_bounds: Rectangle,
     action: Action,
+    previous_click: Option<mouse::Click>,
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Debug)]
@@ -583,6 +627,8 @@ where
     content: &'b mut Element<'a, Message, Theme, Renderer>,
     tree: &'b mut Tree,
     overlay_bounds: Rectangle,
+    overlay_opacity: f32,
+    drag_border_radius: f32,
 }
 
 impl<'a, 'b, Message, Theme, Renderer>
@@ -609,15 +655,39 @@ where
         layout: Layout<'_>,
         cursor_position: Cursor,
     ) {
-        Widget::<Message, Theme, Renderer>::draw(
-            self.content.as_widget(),
-            self.tree,
-            renderer,
-            theme,
-            inherited_style,
-            layout,
-            cursor_position,
-            &Rectangle::with_size(Size::INFINITE),
-        );
+        renderer.with_layer(self.overlay_bounds, |renderer| {
+            Widget::<Message, Theme, Renderer>::draw(
+                self.content.as_widget(),
+                self.tree,
+                renderer,
+                theme,
+                inherited_style,
+                layout,
+                cursor_position,
+                &Rectangle::with_size(Size::INFINITE),
+            );
+
+            if self.overlay_opacity < 1.0 {
+                use iced_core::{Border, Color, Shadow};
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: layout.bounds(),
+                        border: Border {
+                            color: Color::TRANSPARENT,
+                            width: 0.0,
+                            radius: self.drag_border_radius.into(),
+                        },
+                        shadow: Shadow::default(),
+                        snap: false,
+                    },
+                    Color::from_rgba(
+                        1.0,
+                        1.0,
+                        1.0,
+                        (1.0 - self.overlay_opacity) * 0.5,
+                    ),
+                );
+            }
+        });
     }
 }
